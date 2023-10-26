@@ -1,0 +1,40 @@
+#include <bsp.h>
+; -------------------------------------
+;           MODULE Definitions
+; -------------------------------------
+            MODULE  BSP
+            PUBLIC  SysSetup
+            RSEG    CODE
+; -------------------------------------
+SetupWDT    MOV.W   #WDTPW+WDTHOLD,&WDTCTL
+            RET
+
+SetupLCD    BIC.B   #LCD_E+LCD_RS+LCD_RW, LCDControlSel
+            BIS.B   #LCD_E+LCD_RS+LCD_RW, LCDControlDir
+            BIC.B   #0xFF, LCDArrPortSel
+            BIS.B   #0xFF, LCDArrPortDir
+            RET
+          
+SetupPBs    BIC.B   #PBs, PBsArrPortSel ; Configure PBs as GPIO
+            BIC.B   #PBs, PBsArrPortDir ; Configure PBs input
+            BIC.B   #PBs, PBsArrIntEdgeSel ; Configure PB0, PB1 falling edge
+            BIS.B   #PBs, PBsArrIntEn ; Enable interrupt for PBs
+            BIC.B   #PBs, PBsArrIntPend ; Clear pending interrupts
+            RET
+            
+
+SetupADC    BIS.W   #ADC_SHT+ADC_ON+ADC_IE, ADC_CONTROL0 ; 4x sample-and-hold, ADC10 on, interrupt enable
+            BIS.W   #ADC_INCH+ADC_DIV+ADC_SSEL, ADC_CONTROL1 ; Input channel A3 (P1.3), 8 clock divider , select clock  
+            BIS.B   #ADC_CH, ADC_AE ; Enable A3 analog input
+
+            RET
+          
+SysSetup    CALL    #SetupWDT
+            CALL    #SetupLCD
+            CALL    #SetupPBs
+            CALL    #SetupADC
+            RET
+; -------------------------------------
+            ENDMOD
+; -------------------------------------
+            END

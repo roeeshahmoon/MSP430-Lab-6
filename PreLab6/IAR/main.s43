@@ -1,0 +1,61 @@
+#include <bsp.h>
+; -------------------------------------
+;           MACRO Definitions
+; -------------------------------------
+
+
+; -------------------------------------
+            NAME    Main
+            PUBLIC  state, Vmax, Vavg
+            EXTERN  Setup, State0, State1, State2 ; API Routines
+            EXTERN  PORT1_ISR, ADC_ISR ; HAL Interrupt Vectors
+; -------------------------------------
+;           RAM Memory
+; -------------------------------------
+            ORG     0x0200      ;RAM ADDRESS
+Vmax        DW      0 ;2=Vmax
+Vavg        DW      0
+state       DB      0
+; -------------------------------------
+;           Flash Memory
+; -------------------------------------
+            ORG     0xC000      ;Flash ADDRESS
+            ; P2 = LCD Data
+            ; P1.5-P1.7 = LCD E, RS, RW
+            ; P1.0-P1.1 = PB0-PB1
+            ; P1.3 = Analog input A3
+
+Main        MOV.W   #STACK_ADDRESS, SP
+            CALL    #InitRAM ; Initialize RAM values so everything works properly on hard reset
+            CALL    #Setup ; BSP peripherals initialization
+            
+;---------------FSM loop---------------
+state_fsm   DINT
+
+state0      CMP.B   #0, state
+            JNE     state1
+            CALL    #State0
+
+state1      CMP.B   #1, state ; P2.0 (PB0) selected
+            JNE     state2
+            CALL    #State1
+
+state2      CMP.B   #2, state ; P2.1 (PB1) selected
+            JNE     fsm_end
+            CALL    #State2
+            
+fsm_end     EINT
+            JMP     state_fsm
+; -------------------------------------
+InitRAM     CLR.B   state
+            RET
+;-------------------------------------------------------------------------------
+            COMMON INTVEC
+            
+            ORG     PORT1_VECTOR
+            DW      PORT1_ISR
+            ORG     ADC_VECTOR
+            DW      ADC_ISR
+            ORG     RESET_VECTOR                 ; MSP430 RESET Vector
+            DW      Main
+            END
