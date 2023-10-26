@@ -1,0 +1,331 @@
+#include <bsp.h>
+; -------------------------------------
+;           MACRO Definitions
+; -------------------------------------          
+
+; -------------------------------------
+;           MODULE Definitions
+; -------------------------------------
+            MODULE  API
+            PUBLIC  State0, State1, State2, State3
+            EXTERN  state, Vavg ; RAM variables
+            EXTERN  LCDData, LCDCmd, LCDSentence, StartADC, StopADC ; HAL Routines
+            RSEG    CODE
+; -------------------------------------
+S1_L1       DW      "Signal Shape:"
+
+sine        DW      "sine    "
+triangle    DW      "triangle"
+pwm         DW      "pwm     "
+
+S2_L1       DW      "Vavg = 0.00 [v]"
+
+S3_L1       DW      "Sine Dervitve"
+
+; -------------------------------------
+State0      BIS.W   #LPM3+GIE, SR ; Enter LPM3 + Enable global interrupts
+            RET
+; -------------------------------------------------
+                ;State1
+;---------------------------------------------------
+State1      MOV.B   state, R4 ; saving current state, so we can check if state was changed by an interrupt
+            PUSH.B  #LCD_Clear ;cursor gets set to the beginning of the second line
+            CALL    #LCDCmd  
+            PUSH.B  #LCD_CursorResetL1 ;cursor gets set to the beginning of the second line
+            CALL    #LCDCmd                        
+            PUSH.W  #S1_L1
+            CALL    #LCDSentence
+            PUSH.B  #LCD_CursorResetL2 ;cursor gets set to the beginning of the second line
+            CALL    #LCDCmd
+
+            
+MalcAlgo    MOV.W   #20000, R15    ;do it 20,000 times              
+            CLR   R8   ;Counter Probability
+            MOV   #255,R10 ;0.25Vcc
+            
+
+HigherQuat  CMP     ADC_MEM, R10
+            JL      ADCLoop
+            ADD      #1, R8
+            
+
+ADCLoop     DINT      
+            CALL    #StartADC
+            BIS.W   #LPM0+GIE, SR ; Enter LPM0 + Enable global interrupts
+            NOP
+            CMP.B   state, R4
+            JNE     State1EndI
+            
+            DEC     R15
+            JNZ     HigherQuat
+
+            PUSH.B  #LCD_CursorResetL2
+            CALL    #LCDCmd
+            
+discPWM     CMP   #9000,R8
+            JL   discTria
+PrintPWM    PUSH.W  #pwm
+            CALL    #LCDSentence
+            JMP     MalcAlgo
+         
+            
+discTria    CMP   #6300,R8
+            JGE    PrintSine
+            
+PrintTria   PUSH.W  #triangle
+            CALL    #LCDSentence
+            ;MOV     #1,R13   ;flag printer already
+             JMP     MalcAlgo
+            
+
+PrintSine   PUSH.W  #sine
+            CALL    #LCDSentence
+              
+           JMP     MalcAlgo
+                           
+           
+            
+
+State1EndI  CALL    #StopADC
+            PUSH.B  #LCD_Clear
+            CALL    #LCDCmd
+            RET
+; ---------------------------------------------------
+                      ;Printing LCD state two
+; ---------------------------------------------------    
+
+S2_PrintVal POP.W   R15   ;save adress state 2 print
+            POP.W   R11   ;the avg 
+            PUSH.W  R15
+            
+            MOV     #7, R5   ;for loop 7 times for cursur right
+MoveCursor  PUSH.B  #LCD_CursorRight
+            CALL    #LCDCmd
+            DEC     R5
+            JNZ     MoveCursor
+           
+           
+Casting     PUSH.W  R11          ;avg in digtal 
+            PUSH.W  #ADC_DELTA  ;3.5 * avg / 2^10 -1 
+            CALL    #DIV        ;div is oppsite of mult
+            POP     R11
+            ADD.B   #48, R11
+            PUSH.B  R11
+            CALL    #LCDData
+            
+            PUSH.B  #LCD_CursorRight
+            CALL    #LCDCmd
+            MOV     #2, R5  ;for loop 2 times for rminder
+RemainderL  PUSH.W  #10
+            CALL    #MULT
+            PUSH.W  #ADC_DELTA
+            CALL    #DIV
+            POP     R11
+            ADD.B   #48, R11     ;add zero to nun to get in ascii
+            PUSH.B  R11
+            CALL    #LCDData
+            DEC     R5
+            JNZ     RemainderL
+            
+            POP     R11
+            
+            RET
+; -------------------------------------------------
+                ;State2
+;---------------------------------------------------
+State2      MOV.B   state, R4 ; saving current state, so we can check if state was changed by an interrupt
+            PUSH.B  #LCD_Clear ;cursor gets set to the beginning of the second line
+            CALL    #LCDCmd  
+            PUSH.B  #LCD_CursorResetL1 ;cursor gets set to the beginning of the second line
+            CALL    #LCDCmd                 
+            PUSH.W  #S2_L1
+            CALL    #LCDSentence
+            CLR     Vavg
+           
+Start2      CLR     R9     ;BEST AVG
+            MOV     #32, R8 ;foor loop avg of sum 32 values 
+            MOV     #5, R14
+            
+AvgLoop     MOV     #1024, R15 ; 2^x ,times of sampels, will be summed  
+            MOV     #10, R5 ; x  poewr wil be divided
+            CLR     R6 ; LSB half of 32bit number
+            CLR     R7 ; MSB half of 32bit number
+            
+AvgLoop2    DINT       ;disable else interupt
+            CALL    #StartADC     ;start sampling
+            BIS.W   #LPM0+GIE, SR ; Enter LPM0 + Enable global interrupts
+            NOP
+            CMP.B   state, R4 ;check state
+            JNE     State2EndI
+            
+            ADD     ADC_MEM, R6   ;foor loop 1024 sum of voltages ; R6 is sum 
+            ADC     R7            
+            DEC     R15  ;nums of sampels -1
+            JNZ     AvgLoop2
+            
+DivAvg      CLRC             ;C=0 not increase to R7
+            RRC     R7      ;divide R7 by 2^12 and concatenation
+            RRC     R6      ;divide R6 by 2^12 and concatenation
+            DEC     R5       ;foor loop 12 times
+            JNZ     DivAvg
+
+                     
+BestAvg     ADD     R6,R9        ;R6 avg , R9 best avg
+            DEC     R8       ;foor loop 12 times
+            JNZ     AvgLoop
+            
+DivAgain    RRA     R9     
+            DEC     R14       ;foor loop 3 times
+            JNZ     DivAgain            
+            
+
+            ; print avg
+            PUSH.B  #LCD_CursorResetL1
+            CALL    #LCDCmd
+            PUSH.W  R9     ;best avg
+            CALL    #S2_PrintVal
+            JMP     Start2
+
+
+State2EndI  PUSH.B  #LCD_Clear
+            CALL    #LCDCmd
+            RET
+            
+            
+; -------------------------------------------------
+                ;State3
+;---------------------------------------------------            
+State3      MOV.B   state, R4 ; saving current state, so we can check if state was changed by an interrupt
+            PUSH.B  #LCD_CursorResetL1 ;cursor gets set to the beginning of the second line
+            CALL    #LCDCmd                        
+            PUSH.W  #S3_L1
+            CALL    #LCDSentence
+            PUSH.B  #LCD_CursorResetL2 ;cursor gets set to the beginning of the second line
+            CALL    #LCDCmd
+            
+Begin       CLR     R5   ;FLAG Change MEM Samples
+            CLR     R6   ; SAMPLE 1
+            CLR     R7   ;SAMPLE 2 
+            CLR     R8  ;CHECK THERE IS 2 SAMPLES
+            MOV     #1024, R15  
+
+
+            
+            
+Start3      XOR     #1,R5  
+
+
+            MOV     #500,R12  ;BURN TO GET 10 HZ
+BURN        DEC  R12
+            JNZ  BURN
+              
+            CMP     #1,R5     ;Check flag
+            JZ      elsi            
+ifi         MOV     ADC_MEM,R6     ;add mem R6 first sample
+            ADD     #1,R8 
+            JMP     endi
+            
+elsi        MOV     ADC_MEM,R7      ;add mem R7 second sample 
+            ADD     #1,R8 
+            
+          
+endi         CMP #2,R8      ;THERE IS 2 SAMPLES
+             JNZ  LoopSam              
+             CLR   R8 
+             
+             SUB  R6,R7
+             JL   zero
+
+one          BIS.B   #10h,&P1OUT             ; P1.4 = 1          
+             JMP Start3
+            
+zero         BIC.B   #10h,&P1OUT             ; P1.4 = 0
+             JMP Start3
+
+LoopSam     DINT       
+            CALL    #StartADC
+            BIS.W   #LPM0+GIE, SR ; Enter LPM0 + Enable global interrupts
+            NOP
+            CMP.B   state, R4
+            JNE     State1EndI
+            
+            DEC     R15
+            JNZ     Start3
+            JMP     Begin
+            
+
+State3EndI  PUSH.B  #LCD_Clear
+            CALL    #LCDCmd
+            RET
+            
+; -------------------------------------
+EndState    CLR.B   state
+            RET
+; -------------------------------------
+DIV         PUSH.W  R4 ; Quotient
+            PUSH.W  R5  ; Divisor
+            PUSH.W  R6  ; Divided
+            PUSH.W  R7
+            PUSH.W  R8  ; Remainder
+            MOV     12(SP), R5     
+            MOV     14(SP), R6 
+            
+            MOV     #17, R7
+            CLR     R4           
+            CLR     R8
+            
+DIV_L2      RLA     R4
+DIV_L1      DEC     R7
+            JZ      DIV_END
+            RLA     R6
+            RLC     R8
+            CMP     R5, R8
+            JLO     DIV_L2
+            SUB     R5, R8
+            SETC
+            RLC     R4
+            JMP     DIV_L1
+            
+            
+DIV_END     MOV     R4, 12(SP) ; Quotient
+            MOV     R8, 14(SP) ; Remainder
+            POP.W   R8
+            POP.W   R7
+            POP.W   R6
+            POP.W   R5
+            POP.W   R4
+            RET
+; -------------------------------------
+MULT        PUSH.W  R4
+            PUSH.W  R5
+            PUSH.W  R6
+            PUSH.W  R7
+            PUSH.W  R8
+            MOV     12(SP), R4 ; Operand 1
+            MOV     14(SP), R5 ; Operand 2
+            MOV     10(SP), 12(SP)
+
+            MOV     #1, R8 ; bit indexer
+            CLR     R6 ; result low
+            CLR     R7 ; result high
+L2          BIT     R8,R5 ; test operand2<0> bit
+            JZ      L1
+            ADD     R4,R7 ;
+L1          RRC     R7 ;was --> rra    R7
+            RRC     R6
+            RLA     R8
+            JNZ     L2
+            
+            ;MOV     R7, 12(SP) ; Result high
+            MOV     R6, 14(SP) ; Result low
+            POP.W   R8
+            POP.W   R7
+            POP.W   R6
+            POP.W   R5
+            POP.W   R4
+            INCD    SP
+            RET
+; -------------------------------------
+            ENDMOD
+; -------------------------------------
+            END
